@@ -37,3 +37,10 @@ class PokemonRespository:
         """
         pokemon = self._db_repsitory.get(**kwargs)
         return pokemon
+    
+    def get_all(self, **kwargs):
+        """
+        Get all the pokemons
+        """
+        pokemons = self._db_repsitory.get_all(**kwargs)
+        return pokemons

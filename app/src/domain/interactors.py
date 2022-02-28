@@ -4,11 +4,12 @@ Modulo to define the use cases od the domain layer.
 
 import asyncio
 import functools
+from fastapi import HTTPException
 from concurrent.futures import ThreadPoolExecutor
 from abc import ABCMeta, abstractmethod
 from typing import TypeVar, Generic, Union
 from requests import Session
-from fastapi import BackgroundTasks
+from ..persistence.schemas import PokemonSchema
 
 TK = TypeVar("TK")
 TR = TypeVar("TR")
@@ -78,9 +79,9 @@ class GetAbilityPokemonListInteractor(BaseClassInteractor[TK, TR]):
         """
         Logic of the use case.
         """
-        def save_pokemon(repository, **kwargs):
-            repository.save(**kwargs)
+        pokemons_types = {}
         try:
+
             with Session() as session:
                 self.service.set_session(session)
                 query_pokemon = self._query.get("pokemon", None)
@@ -93,28 +94,36 @@ class GetAbilityPokemonListInteractor(BaseClassInteractor[TK, TR]):
                     abilitie_index = query_abilitie_index
                 abilitie = abilities_list[abilitie_index].get("ability").get("name")
                 ability = self.service.get_ability(ability_name=abilitie)
-                pokemons_types = {}
+                
                 response_pokemons = []
                 with ThreadPoolExecutor(max_workers=10) as executor:
                     loop = asyncio.get_event_loop()
-                    
                     tasks = [
                         loop.run_in_executor(
                             executor,
-                            functools.partial(self.service.get_pokemon, pokemon_name=pokemon.get("pokemon").get("name"))
+                            functools.partial(self.service.get_pokemon,
+                                pokemon_name=pokemon.get("pokemon").get("name"))
                         )
                         for pokemon in ability.get("pokemon")
                     ]
                     for response in await asyncio.gather(*tasks):
                         response_pokemons.append(response)
+            save_tasks = []
             for tmp_pokemon in response_pokemons:#ability.get("pokemon"):
                 # pokemon_name = pokemon_from_ability.get("pokemon").get("name")
                 pokemon_name = tmp_pokemon.get("name")
                 # tmp_pokemon = self.service.get_pokemon(pokemon_name=pokemon_name)
-                BackgroundTasks().add_task(
-                    save_pokemon,
-                    self.repository,
-                    **tmp_pokemon)
+
+                data_to_save = {
+                    "name":tmp_pokemon["name"],
+                    "weight":tmp_pokemon["weight"],
+                    "location_area_encounters":tmp_pokemon["location_area_encounters"],
+                    "types":tmp_pokemon["types"],
+                    "stats":tmp_pokemon["stats"],
+                    "abilities":tmp_pokemon["abilities"],
+                }
+                save_task = asyncio.ensure_future(self.repository.save_or_update(**data_to_save))
+                save_tasks.append(save_task)
 
                 for type_item in tmp_pokemon.get("types", []):
                     type_name = type_item.get("type").get("name")
@@ -122,15 +131,66 @@ class GetAbilityPokemonListInteractor(BaseClassInteractor[TK, TR]):
                         pokemons_types[type_name].append(pokemon_name)
                     else:
                         pokemons_types[type_name] = [pokemon_name]
+            await asyncio.gather(*save_tasks, return_exceptions=True)
             self._data = {
                 "ability": abilitie,
                 "results":[{"name":key,"pokemons":value}
                     for key, value in pokemons_types.items()]
                 }
-            
+        except ValueError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
         except Exception as error:
-            raise error
+            print(error)
+            raise HTTPException(status_code=404, detail="Pokemon not found") from error
 
+
+
+    def set_parameters(self, *args, **kwargs):
+        self._query = kwargs
+
+    def get_data(self):
+        return self._data
+
+class GetAllSavedPokemonInteractor(BaseClassInteractor[TK, TR]):
+    """
+    Get all saved pokemon from database.
+    """
+
+    def __init__(self, repository: TR):
+        self.repository = repository
+
+    async def execute(self):
+        """
+        Logic of the use case.
+        """
+        try:
+            self._data = [PokemonSchema.from_orm(item) for item in self.repository.get_all(**self._query)]
+        except Exception as error:
+            print(error)
+            raise HTTPException(status_code=500, detail="Internal server error") from error
+
+    def set_parameters(self, *args, **kwargs):
+        self._query = kwargs
+
+    def get_data(self):
+        return self._data
+
+class GetSavedPokemonInteractor(BaseClassInteractor[TK, TR]):
+    """
+    Get a pokemon from database.
+    """
+
+    def __init__(self, repository: TR):
+        self.repository = repository
+
+    async def execute(self):
+        """
+        Logic of the use case.
+        """
+        try:
+            self._data = PokemonSchema.from_orm(self.repository.get(**self._query))
+        except Exception as error:
+            raise HTTPException(status_code=500, detail="Internal server error") from error
 
     def set_parameters(self, *args, **kwargs):
         self._query = kwargs

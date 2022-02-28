@@ -1,5 +1,6 @@
 from fastapi import APIRouter
-from . import pokemons
+from . import pokemons, consults
 
-routes = APIRouter(prefix="/api/v1", tags=["api"])
+routes = APIRouter(prefix="/api/v1")
 routes.include_router(pokemons.routes)
+routes.include_router(consults.routes)
